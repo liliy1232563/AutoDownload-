@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: anime-auto-downloader
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: BOT_TOKEN
+        sync: false
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_NAME
+        value: AnimeAutoDownloader
+      - key: START_PIC
+        value: ""
+      - key: HELP_PIC
+        value: ""
+      - key: ABOUT_PIC
+        value: ""
+      - key: FSUB_PIC
+        value: ""
+      - key: PREMIUM_PIC
+        value: ""
+      - key: DOWNLOAD_PIC
+        value: ""
