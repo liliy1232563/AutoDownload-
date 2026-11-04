@@ -1,14 +1,22 @@
+
 """MongoDB user management for Anime Auto Downloader."""
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
+from config import Config
+
+logger = logging.getLogger(__name__)
+
+user_db = None
+
 
 class UserDatabase:
-    def __init__(self, database_url: str, database_name: str = "anime_downloader"):
+    def __init__(self, database_url: str, database_name: str = "AnimeAutoDownloader"):
         if not database_url:
             raise ValueError("DATABASE_URL is required")
 
@@ -121,5 +129,33 @@ class UserDatabase:
     async def get_total_users(self) -> int:
         return await self.users.count_documents({})
 
-    async def close(self):
+    def close(self):
         self.client.close()
+
+
+async def init_db():
+    """Initialize MongoDB when DATABASE_URL is configured."""
+    global user_db
+
+    if not Config.DATABASE_URL:
+        logger.warning("DATABASE_URL is missing. MongoDB initialization skipped.")
+        return None
+
+    user_db = UserDatabase(
+        database_url=Config.DATABASE_URL,
+        database_name=Config.DATABASE_NAME,
+    )
+
+    await user_db.setup()
+    logger.info("MongoDB user database initialized.")
+    return user_db
+
+
+async def close_db():
+    """Close MongoDB connection."""
+    global user_db
+
+    if user_db is not None:
+        user_db.close()
+        user_db = None
+        logger.info("MongoDB connection closed.")
