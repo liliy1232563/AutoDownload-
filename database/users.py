@@ -13,6 +13,8 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 user_db = None
+users_collection = None
+ADMINS = []
 
 
 class UserDatabase:
@@ -23,6 +25,8 @@ class UserDatabase:
         self.client = AsyncIOMotorClient(database_url)
         self.db = self.client[database_name]
         self.users = self.db["users"]
+        self.admins = self.db["admins"]
+        self.premium_users = self.db["premium_users"]
 
     async def setup(self):
         await self.users.create_index("user_id", unique=True)
@@ -159,3 +163,13 @@ async def close_db():
         user_db.close()
         user_db = None
         logger.info("MongoDB connection closed.")
+
+
+def get_database():
+    """Return the initialized MongoDB database wrapper."""
+    return user_db
+
+
+def get_admins_collection():
+    """Return the admin collection when MongoDB is available."""
+    return user_db.admins if user_db is not None else None

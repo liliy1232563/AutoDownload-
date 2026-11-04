@@ -145,3 +145,11 @@ def validate_url_syntax(url: str) -> str:
     """
     normalized, _scheme, _port, _hostname, _netloc = _parse_url(url)
     return normalized
+
+
+class URLValidator:
+    """Backward-compatible synchronous URL syntax validator."""
+
+    def validate(self, url: str) -> bool:
+        validate_url_syntax(url)
+        return True
