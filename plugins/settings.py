@@ -21,8 +21,8 @@ THUMB_DIR = os.path.join("data", "thumbs")
 DEFAULTS = {"upload_as": "video", "metadata": True, "template": "",
             "filemeta": False, "tags": {}}
 DEFAULT_TEMPLATE = (
-    "🎬 <b>{title}</b>\n\n🎞 Quality: <b>{quality}</b>\n"
-    "💾 Size: <b>{size}</b>\n\n<i>Powered by @Solurix_bots</i>"
+    "🎬 <b>{title}</b>\n\n🎞 ǫᴜᴀʟɪᴛʏ: <b>{quality}</b>\n"
+    "💾 sɪᴢᴇ: <b>{size}</b>\n\n<i>Powered by @Solurix_bots</i>"
 )
 
 TAGS = {

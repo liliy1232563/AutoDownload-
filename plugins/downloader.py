@@ -61,12 +61,15 @@ def bar(p):
 
 
 def progress_text(stage, title, pct, done, total, speed=None, eta=None):
+    from plugins.style import sc
     return (
-        f"<b>{stage}</b>\n━━━━━━━━━━━━━━━\n🎬 {esc(title[:60])}\n\n"
+        f"<b>{sc(stage)}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🎬 {esc(title[:60])}\n\n"
         f"[{bar(pct)}] <b>{pct:.1f}%</b>\n"
-        f"📦 {human(done)} / {human(total) if total else '?'}\n"
-        f"⚡ {human(speed) + '/s' if speed else '—'}\n"
-        f"⏳ ETA: {fmt_time(eta)}"
+        f"➲ {sc('size')}: {human(done)} / {human(total) if total else '?'}\n"
+        f"➲ {sc('speed')}: {human(speed) + '/s' if speed else '—'}\n"
+        f"➲ {sc('eta')}: {fmt_time(eta)}"
     )
 
 
@@ -261,14 +264,14 @@ async def _run_job(client, status, job, quality, uid):
     target = get_default_channel(uid) or chat_id
     total = 1
     try:
-        await safe_edit(status, "⏳ <b>Queued…</b>\nWaiting for a free slot.")
+        await safe_edit(status, "⏳ <b>ǫᴜᴇᴜᴇᴅ…</b>\nᴡᴀɪᴛɪɴɢ ꜰᴏʀ ᴀ ꜰʀᴇᴇ sʟᴏᴛ.")
         async with SLOTS:
             plan = await _plan_qualities(job["url"], quality)
             total = len(plan)
             for i, q in enumerate(plan, start=1):
                 part = f" ({i}/{total})" if total > 1 else ""
                 label = "Best" if q == "best" else f"{q}p"
-                await safe_edit(status, f"🚀 <b>Starting download{part}…</b>\n🎞 {label}")
+                await safe_edit(status, f"🚀 <b>sᴛᴀʀᴛɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅ{part}…</b>\n🎞 {label}")
                 sub = os.path.join(workdir, str(i))
                 os.makedirs(sub, exist_ok=True)
                 path, info = await _download(
@@ -283,20 +286,20 @@ async def _run_job(client, status, job, quality, uid):
                         "Make sure the bot is still an admin in your channel."
                         if target != chat_id else "Please try again."
                     )
-                    await safe_edit(status, f"❌ <b>Upload failed.</b>\n{hint}")
+                    await safe_edit(status, f"❌ <b>ᴜᴘʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ.</b>\n{hint}")
                     return
                 shutil.rmtree(sub, ignore_errors=True)
         record_download(uid)
         where = "your channel" if target != chat_id else "this chat"
         await safe_edit(
             status,
-            f"✅ <b>Done!</b>\n\n🎬 {esc(title[:60])}\n📦 {total} file(s) sent to {where}.",
+            f"✅ <b>ᴅᴏɴᴇ!</b>\n\n🎬 {esc(title[:60])}\n📦 {total} ꜰɪʟᴇ(s) sᴇɴᴛ ᴛᴏ {where}.",
         )
     except Exception:
         LOGGER.exception("Download failed")
         await safe_edit(
             status,
-            "❌ <b>Download failed.</b>\nThe link may be unsupported, private, or expired.",
+            "❌ <b>ᴅᴏᴡɴʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ.</b>\nThe link may be unsupported, private, or expired.",
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -357,11 +360,11 @@ def register_thumb_handlers(app):
 
 def quality_keyboard(token):
     return Markup([
-        [Btn("📱 360p", callback_data=f"dl:{token}:360"), Btn("📺 480p", callback_data=f"dl:{token}:480")],
-        [Btn("🖥 720p", callback_data=f"dl:{token}:720"), Btn("🎥 1080p", callback_data=f"dl:{token}:1080")],
-        [Btn("👑 Best Quality", callback_data=f"dl:{token}:best")],
-            [Btn("📦 All Quality 💎", callback_data=f"dl:{token}:all")],
-        [Btn("✖ Cancel", callback_data=f"dl:{token}:x")],
+        [Btn("📱 360ᴘ", callback_data=f"dl:{token}:360"), Btn("📺 480ᴘ", callback_data=f"dl:{token}:480")],
+        [Btn("🖥 720ᴘ", callback_data=f"dl:{token}:720"), Btn("🎥 1080ᴘ", callback_data=f"dl:{token}:1080")],
+        [Btn("👑 ʙᴇsᴛ ǫᴜᴀʟɪᴛʏ", callback_data=f"dl:{token}:best")],
+            [Btn("📦 ᴀʟʟ ǫᴜᴀʟɪᴛʏ 💎", callback_data=f"dl:{token}:all")],
+        [Btn("✖ ᴄᴀɴᴄᴇʟ", callback_data=f"dl:{token}:x")],
     ])
 
 
@@ -373,13 +376,13 @@ def register_download_handlers(app):
     )
     async def on_link(_client, message):
         url = URL_RE.search(message.text).group(0)
-        wait = await message.reply_text("🔎 <b>Checking link…</b>", parse_mode=ParseMode.HTML)
+        wait = await message.reply_text("🔎 <b>ᴄʜᴇᴄᴋɪɴɢ ʟɪɴᴋ…</b>", parse_mode=ParseMode.HTML)
         try:
             info = await asyncio.to_thread(_extract, url)
         except Exception as exc:
             LOGGER.exception("Link check failed")
             reason = esc(str(exc).replace("ERROR: ", "")[:200])
-            await safe_edit(wait, f"❌ <b>Link not supported or not accessible.</b>\n\n<code>{reason}</code>")
+            await safe_edit(wait, f"❌ <b>ʟɪɴᴋ ɴᴏᴛ sᴜᴘᴘᴏʀᴛᴇᴅ ᴏʀ ɴᴏᴛ ᴀᴄᴄᴇssɪʙʟᴇ.</b>\n\n<code>{reason}</code>")
             return
         if len(PENDING) >= MAX_PENDING:
             PENDING.pop(next(iter(PENDING)))
@@ -387,9 +390,9 @@ def register_download_handlers(app):
         title = info.get("title") or "Video"
         PENDING[token] = {"url": url, "uid": message.from_user.id, "title": title}
         text = (
-            "<b>🎬 𝗟𝗶𝗻𝗸 𝗥𝗲𝗮𝗱𝘆</b>\n━━━━━━━━━━━━━━━\n\n"
+            "<b>🎬 ʟɪɴᴋ ʀᴇᴀᴅʏ</b>\n━━━━━━━━━━━━━━━\n\n"
             f"📝 <b>{esc(title[:80])}</b>\n"
-            f"⏱ Duration: {fmt_time(info.get('duration'))}\n\n👇 <b>Select quality:</b>"
+            f"⏱ ᴅᴜʀᴀᴛɪᴏɴ: {fmt_time(info.get('duration'))}\n\n👇 <b>sᴇʟᴇᴄᴛ ǫᴜᴀʟɪᴛʏ:</b>"
         )
         await safe_edit(wait, text, quality_keyboard(token))
 
@@ -403,7 +406,7 @@ def register_download_handlers(app):
         if choice == "x":
             PENDING.pop(token, None)
             await query.answer("Cancelled")
-            await safe_edit(query.message, "✖ <b>Cancelled.</b>")
+            await safe_edit(query.message, "✖ <b>ᴄᴀɴᴄᴇʟʟᴇᴅ.</b>")
             return
         uid = query.from_user.id
         allowed, reason = check_limits(uid, choice)

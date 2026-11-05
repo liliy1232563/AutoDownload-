@@ -104,6 +104,8 @@ class YtDlpAdapter(SourceAdapter):
         return True
 
     async def resolve(self, url):
+        if urlparse(url).path.lower().endswith((".zip", ".rar", ".7z", ".tar", ".gz")):
+            raise RuntimeError("This is an archive file, not a video")
         info = await asyncio.to_thread(_extract, url)
         return Resolved(url, info.get("title") or "Video", info.get("duration"), self.name)
 
