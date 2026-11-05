@@ -1,269 +1,259 @@
-"""Secure direct-media URL downloader for Anime Auto Downloader.
-
-Only publicly reachable direct media URLs are supported here. Website-specific
-adapters can be added separately when their terms and access rules permit it.
-Branding: @Solurix_bots
-"""
-
 import asyncio
-import ipaddress
+import glob
 import html
 import logging
-import mimetypes
 import os
-import socket
-import tempfile
+import re
+import shutil
 import time
-from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+import uuid
+from contextlib import suppress
 
-import aiohttp
-from aiohttp.abc import AbstractResolver
+import yt_dlp
 from pyrogram import filters
 from pyrogram.enums import ParseMode
+from pyrogram.types import InlineKeyboardButton as Btn
+from pyrogram.types import InlineKeyboardMarkup as Markup
+
+from plugins.channels import get_default_channel
 
 LOGGER = logging.getLogger("solurix.anime_downloader.downloader")
-MAX_FILE_SIZE = int(os.getenv("MAX_DOWNLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
-CHUNK_SIZE = 1024 * 1024
-MAX_REDIRECTS = 5
-REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=60 * 60, connect=20, sock_connect=20, sock_read=90)
-VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".mpeg", ".mpg", ".ts"}
+URL_RE = re.compile(r"https?://\S+")
+DOWNLOAD_DIR = "downloads"
+MAX_UPLOAD = 2 * 1024**3
+MAX_PENDING = 200
+MAX_PARALLEL = 2
+PENDING = {}
+ACTIVE = set()
+TASKS = set()
+SLOTS = asyncio.Semaphore(MAX_PARALLEL)
 
 
-class UnsafeURL(ValueError):
-    """Raised when a URL is not safe to fetch."""
+def esc(t):
+    return html.escape(str(t))
 
 
-class PinnedResolver(AbstractResolver):
-    """Resolve only the already-validated public addresses for one hostname."""
-
-    def __init__(self, hostname: str, addresses: list[str]):
-        self.hostname = hostname.lower().rstrip(".")
-        self.addresses = addresses
-
-    async def resolve(self, host, port=0, family=socket.AF_INET):
-        if host.lower().rstrip(".") != self.hostname:
-            raise OSError("Unexpected hostname requested by HTTP client")
-        records = []
-        for address in self.addresses:
-            ip = ipaddress.ip_address(address)
-            records.append({
-                "hostname": host,
-                "host": address,
-                "port": port,
-                "family": socket.AF_INET6 if ip.version == 6 else socket.AF_INET,
-                "proto": 0,
-                "flags": 0,
-            })
-        return records
-
-    async def close(self):
-        return None
+def human(n):
+    if not n:
+        return "0 B"
+    n = float(n)
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {u}"
+        n /= 1024
+    return f"{n:.1f} TB"
 
 
-async def _validate_and_resolve(url: str) -> tuple[str, list[str]]:
-    """Allow only HTTP(S) public hosts and pin DNS results to prevent SSRF."""
-    try:
-        parts = urlsplit(url.strip())
-        port = parts.port
-    except ValueError as exc:
-        raise UnsafeURL("Invalid URL format.") from exc
-
-    if parts.scheme.lower() not in {"http", "https"}:
-        raise UnsafeURL("Please send a direct HTTP or HTTPS media link.")
-    if not parts.hostname or parts.username or parts.password:
-        raise UnsafeURL("That link is not valid.")
-    if port not in (None, 80, 443):
-        raise UnsafeURL("Links using custom ports are not supported.")
-
-    hostname = parts.hostname.rstrip(".").lower()
-    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith((".local", ".internal", ".localhost")):
-        raise UnsafeURL("Private or local network links are not allowed.")
-
-    try:
-        literal_ip = ipaddress.ip_address(hostname)
-        addresses = [str(literal_ip)]
-    except ValueError:
-        loop = asyncio.get_running_loop()
-        try:
-            infos = await loop.getaddrinfo(hostname, port or (443 if parts.scheme == "https" else 80), type=socket.SOCK_STREAM)
-        except (OSError, socket.gaierror) as exc:
-            raise UnsafeURL("Could not resolve the link's host.") from exc
-        addresses = list(dict.fromkeys(info[4][0] for info in infos))
-
-    if not addresses:
-        raise UnsafeURL("The link's host did not resolve.")
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
-        if not ip.is_global:
-            raise UnsafeURL("Private or non-public network addresses are not allowed.")
-    return hostname, addresses
+def fmt_time(s):
+    if s is None:
+        return "—"
+    s = int(s)
+    h, r = divmod(s, 3600)
+    m, sec = divmod(r, 60)
+    return f"{h}h {m}m {sec}s" if h else f"{m}m {sec}s"
 
 
-async def _open_validated(url: str):
-    """Open one URL without automatic redirects, using pinned public DNS."""
-    hostname, addresses = await _validate_and_resolve(url)
-    resolver = PinnedResolver(hostname, addresses)
-    connector = aiohttp.TCPConnector(resolver=resolver, use_dns_cache=False, limit=4)
-    session = aiohttp.ClientSession(
-        connector=connector,
-        timeout=REQUEST_TIMEOUT,
-        headers={"User-Agent": "AnimeAutoDownloader/1.0 (+@Solurix_bots)"},
-        trust_env=False,
+def bar(p):
+    p = max(0.0, min(100.0, p))
+    f = int(p // 10)
+    return "█" * f + "░" * (10 - f)
+
+
+def progress_text(stage, title, pct, done, total, speed=None, eta=None):
+    return (
+        f"<b>{stage}</b>\n━━━━━━━━━━━━━━━\n🎬 {esc(title[:60])}\n\n"
+        f"[{bar(pct)}] <b>{pct:.1f}%</b>\n"
+        f"📦 {human(done)} / {human(total) if total else '?'}\n"
+        f"⚡ {human(speed) + '/s' if speed else '—'}\n"
+        f"⏳ ETA: {fmt_time(eta)}"
     )
-    try:
-        response = await session.get(url, allow_redirects=False)
-    except Exception:
-        await session.close()
-        raise
-    return session, response
 
 
-async def _download_to_temp(url: str) -> tuple[str, str, str, int]:
-    """Stream a supported direct media response to a temporary file."""
-    current_url = url
-    session = response = None
-    for redirect_count in range(MAX_REDIRECTS + 1):
-        session, response = await _open_validated(current_url)
-        if response.status in {301, 302, 303, 307, 308}:
-            location = response.headers.get("Location")
-            response.release()
-            await session.close()
-            if not location or redirect_count >= MAX_REDIRECTS:
-                raise UnsafeURL("Too many redirects or an invalid redirect response.")
-            current_url = urljoin(current_url, location)
-            continue
-        break
-
-    assert session is not None and response is not None
-    temp_path = None
-    try:
-        if response.status < 200 or response.status >= 300:
-            raise RuntimeError(f"The source server returned HTTP {response.status}.")
-
-        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        final_path = urlsplit(str(response.url)).path
-        suffix = Path(final_path).suffix.lower()
-        is_video = content_type.startswith("video/") or suffix in VIDEO_EXTENSIONS
-        if not is_video and not (content_type in {"application/octet-stream", "binary/octet-stream"} and suffix in VIDEO_EXTENSIONS):
-            raise RuntimeError("This link does not appear to point directly to a video file.")
-        if suffix not in VIDEO_EXTENSIONS:
-            guessed = mimetypes.guess_extension(content_type) if content_type.startswith("video/") else None
-            suffix = guessed if guessed in VIDEO_EXTENSIONS else ".mp4"
-
-        content_length = response.content_length
-        if content_length is not None and content_length > MAX_FILE_SIZE:
-            raise RuntimeError(f"File is larger than the configured limit ({MAX_FILE_SIZE // (1024 * 1024)} MB).")
-
-        handle = tempfile.NamedTemporaryFile(prefix="aad_", suffix=suffix, delete=False)
-        temp_path = handle.name
-        total = 0
-        with handle:
-            async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                total += len(chunk)
-                if total > MAX_FILE_SIZE:
-                    raise RuntimeError(f"File exceeded the configured limit ({MAX_FILE_SIZE // (1024 * 1024)} MB).")
-                handle.write(chunk)
-        if total == 0:
-            raise RuntimeError("The source returned an empty file.")
-        return temp_path, suffix, content_type, total
-    except Exception:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-        raise
-    finally:
-        response.release()
-        await session.close()
+async def safe_edit(message, text, markup=None):
+    with suppress(Exception):
+        await message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True)
 
 
-def _human_size(size: int) -> str:
-    value = float(size)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if value < 1024 or unit == "TB":
-            return f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{size} B"
+def _extract(url):
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
 
 
-def register_downloader_handlers(app) -> None:
-    """Register private-chat direct video URL handling."""
+async def _download(status, url, quality, workdir, title):
+    loop = asyncio.get_running_loop()
+    state = {"t": 0.0}
+    has_ffmpeg = shutil.which("ffmpeg") is not None
+    if quality == "best":
+        fmt = "bv*+ba/b" if has_ffmpeg else "b"
+    elif has_ffmpeg:
+        fmt = f"bv*[height<={quality}]+ba/b[height<={quality}]/b"
+    else:
+        fmt = f"b[height<={quality}]/b"
 
-    @app.on_message(filters.private & filters.text & ~filters.command([
-        "start", "help", "about", "stats", "addadmin", "deladmin", "adminlist"
-    ]))
-    async def handle_video_url(client, message):
-        raw_text = (message.text or "").strip()
-        parts = raw_text.split()
-        if len(parts) != 1 or not raw_text.lower().startswith(("http://", "https://")):
+    def hook(d):
+        if d.get("status") != "downloading":
             return
+        now = time.monotonic()
+        if now - state["t"] < 3:
+            return
+        state["t"] = now
+        total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+        done = d.get("downloaded_bytes") or 0
+        pct = done * 100 / total if total else 0
+        text = progress_text("⬇️ Downloading", title, pct, done, total, d.get("speed"), d.get("eta"))
+        asyncio.run_coroutine_threadsafe(safe_edit(status, text), loop)
 
-        status = await message.reply_text(
-            "<b>Checking link...</b>\nPlease wait while I verify the source.",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
+    opts = {
+        "format": fmt,
+        "outtmpl": os.path.join(workdir, "%(title).70s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "progress_hooks": [hook],
+        "merge_output_format": "mp4",
+        "restrictfilenames": True,
+        "concurrent_fragment_downloads": 4,
+        "retries": 5,
+        "fragment_retries": 5,
+    }
+
+    def run():
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=True)
+
+    info = await asyncio.to_thread(run)
+    files = [f for f in glob.glob(os.path.join(workdir, "*")) if not f.endswith((".part", ".ytdl", ".json", ".temp"))]
+    if not files:
+        raise RuntimeError("No file was produced")
+    return max(files, key=os.path.getsize), info
+
+
+async def _upload(client, status, path, info, title, quality, target):
+    size = os.path.getsize(path)
+    if size > MAX_UPLOAD:
+        raise RuntimeError("File is larger than Telegram's 2 GB limit")
+    height = info.get("height")
+    label = f"{height}p" if height else quality
+    caption = (
+        f"🎬 <b>{esc(title)}</b>\n\n🎞 Quality: <b>{esc(label)}</b>\n"
+        f"💾 Size: <b>{human(size)}</b>\n\n<i>Powered by @Solurix_bots</i>"
+    )
+    started = time.monotonic()
+    last = {"t": 0.0}
+
+    async def up_progress(current, total):
+        now = time.monotonic()
+        if now - last["t"] < 3 and current != total:
+            return
+        last["t"] = now
+        speed = current / max(now - started, 0.1)
+        eta = (total - current) / speed if speed else None
+        pct = current * 100 / total if total else 0
+        await safe_edit(status, progress_text("⬆️ Uploading", title, pct, current, total, speed, eta))
+
+    if path.lower().endswith(".mp4"):
+        await client.send_video(
+            chat_id=target, video=path, caption=caption, parse_mode=ParseMode.HTML,
+            duration=int(info.get("duration") or 0), width=int(info.get("width") or 0),
+            height=int(height or 0), supports_streaming=True, progress=up_progress,
         )
-        temp_path = None
+    else:
+        await client.send_document(
+            chat_id=target, document=path, caption=caption,
+            parse_mode=ParseMode.HTML, progress=up_progress,
+        )
+
+
+async def _run_job(client, status, job, quality, uid):
+    workdir = os.path.join(DOWNLOAD_DIR, uuid.uuid4().hex[:8])
+    os.makedirs(workdir, exist_ok=True)
+    title = job["title"]
+    chat_id = status.chat.id
+    target = get_default_channel(uid) or chat_id
+    try:
+        await safe_edit(status, "⏳ <b>Queued…</b>\nWaiting for a free slot.")
+        async with SLOTS:
+            await safe_edit(status, "🚀 <b>Starting download…</b>")
+            path, info = await _download(status, job["url"], quality, workdir, title)
+            try:
+                await _upload(client, status, path, info, title, quality, target)
+            except Exception:
+                LOGGER.exception("Upload failed")
+                hint = "Make sure the bot is still an admin in your channel." if target != chat_id else "Please try again."
+                await safe_edit(status, f"❌ <b>Upload failed.</b>\n{hint}")
+                return
+        where = "your channel" if target != chat_id else "this chat"
+        await safe_edit(status, f"✅ <b>Done!</b>\n\n🎬 {esc(title[:60])}\n📤 Sent to {where}.")
+    except Exception:
+        LOGGER.exception("Download failed")
+        await safe_edit(status, "❌ <b>Download failed.</b>\nThe link may be unsupported, private, or expired.")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+        ACTIVE.discard(uid)
+
+
+def quality_keyboard(token):
+    return Markup([
+        [Btn("📱 360p", callback_data=f"dl:{token}:360"), Btn("📺 480p", callback_data=f"dl:{token}:480")],
+        [Btn("🖥 720p", callback_data=f"dl:{token}:720"), Btn("🎥 1080p", callback_data=f"dl:{token}:1080")],
+        [Btn("👑 Best Quality", callback_data=f"dl:{token}:best")],
+        [Btn("✖ Cancel", callback_data=f"dl:{token}:x")],
+    ])
+
+
+def register_download_handlers(app):
+    @app.on_message(
+        filters.private & filters.text
+        & ~filters.command(["start", "help", "about", "addchannel", "channels", "setchannel"])
+        & filters.regex(URL_RE.pattern)
+    )
+    async def on_link(_client, message):
+        url = URL_RE.search(message.text).group(0)
+        wait = await message.reply_text("🔎 <b>Checking link…</b>", parse_mode=ParseMode.HTML)
         try:
-            temp_path, suffix, content_type, size = await _download_to_temp(raw_text)
-            await status.edit_text(
-                f"<b>Download complete</b>\nSize: <code>{_human_size(size)}</code>\nUploading to Telegram...",
-                parse_mode=ParseMode.HTML,
-            )
+            info = await asyncio.to_thread(_extract, url)
+        except Exception:
+            LOGGER.exception("Link check failed")
+            await safe_edit(wait, "❌ <b>Link not supported or not accessible.</b>\nSend a direct video link or a supported episode URL.")
+            return
+        if len(PENDING) >= MAX_PENDING:
+            PENDING.pop(next(iter(PENDING)))
+        token = uuid.uuid4().hex[:8]
+        title = info.get("title") or "Video"
+        PENDING[token] = {"url": url, "uid": message.from_user.id, "title": title}
+        text = (
+            "<b>🎬 𝗟𝗶𝗻𝗸 𝗥𝗲𝗮𝗱𝘆</b>\n━━━━━━━━━━━━━━━\n\n"
+            f"📝 <b>{esc(title[:80])}</b>\n"
+            f"⏱ Duration: {fmt_time(info.get('duration'))}\n\n👇 <b>Select quality:</b>"
+        )
+        await safe_edit(wait, text, quality_keyboard(token))
 
-            last_update = 0.0
+    @app.on_callback_query(filters.regex(r"^dl:([0-9a-f]{8}):(360|480|720|1080|best|x)$"))
+    async def on_quality(client, query):
+        _, token, choice = query.data.split(":")
+        job = PENDING.get(token)
+        if not job or job["uid"] != query.from_user.id:
+            await query.answer("This request expired. Send the link again.", show_alert=True)
+            return
+        if choice == "x":
+            PENDING.pop(token, None)
+            await query.answer("Cancelled")
+            await safe_edit(query.message, "✖ <b>Cancelled.</b>")
+            return
+        uid = query.from_user.id
+        if uid in ACTIVE:
+            await query.answer("One download at a time. Please wait.", show_alert=True)
+            return
+        PENDING.pop(token, None)
+        ACTIVE.add(uid)
+        await query.answer("Added to queue ✅")
+        task = asyncio.create_task(_run_job(client, query.message, job, choice, uid))
+        TASKS.add(task)
+        task.add_done_callback(TASKS.discard)
 
-            async def progress(current: int, total: int, *args):
-                nonlocal last_update
-                now = time.monotonic()
-                if total > 0 and (current >= total or now - last_update >= 5):
-                    last_update = now
-                    percent = min(100, int(current * 100 / total))
-                    try:
-                        await status.edit_text(
-                            f"<b>Uploading video...</b>\n{percent}% • {_human_size(current)} / {_human_size(total)}",
-                            parse_mode=ParseMode.HTML,
-                        )
-                    except Exception:
-                        pass
 
-            caption = "<b>𝗔𝗻𝗶𝗺𝗲 𝗗𝗼𝘄𝗻𝗹𝗼𝗮𝗱𝗲𝗿</b>\n\n<i>Powered by @Solurix_bots</i>"
-            if suffix in VIDEO_EXTENSIONS:
-                await client.send_video(
-                    chat_id=message.chat.id,
-                    video=temp_path,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    progress=progress,
-                    supports_streaming=True,
-                )
-            else:
-                await client.send_document(
-                    chat_id=message.chat.id,
-                    document=temp_path,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    progress=progress,
-                )
-            await status.delete()
-        except UnsafeURL as exc:
-            await status.edit_text(f"Link rejected: {exc}")
-        except asyncio.TimeoutError:
-            await status.edit_text("The source took too long to respond. Try another direct video link.")
-        except aiohttp.ClientError:
-            LOGGER.exception("Network error while processing a direct media URL")
-            await status.edit_text("Could not fetch that link. Check that it is public and points directly to a video.")
-        except Exception as exc:
-            LOGGER.exception("Failed to process a direct media URL")
-            message_text = str(exc)
-            if len(message_text) > 250:
-                message_text = message_text[:247] + "..."
-            await status.edit_text(f"Could not process this link.\n<code>{html.escape(message_text)}</code>", parse_mode=ParseMode.HTML)
-        finally:
-            if temp_path:
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    LOGGER.warning("Could not remove temporary download %s", temp_path)
+def register_downloader_handlers(app):
+    from plugins.channels import register_channel_handlers
+    register_channel_handlers(app)
+    register_download_handlers(app)
