@@ -213,8 +213,9 @@ def register_download_handlers(app):
         wait = await message.reply_text("🔎 <b>Checking link…</b>", parse_mode=ParseMode.HTML)
         try:
             info = await asyncio.to_thread(_extract, url)
-        except Exception:
+        except Exception as exc:
             LOGGER.exception("Link check failed")
+            reason = esc(str(exc).replace("ERROR: ", "")[:200])
             await safe_edit(wait, "❌ <b>Link not supported or not accessible.</b>\nSend a direct video link or a supported episode URL.")
             return
         if len(PENDING) >= MAX_PENDING:
