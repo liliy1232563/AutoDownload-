@@ -19,6 +19,7 @@ USER_COMMANDS = [
     ("delthumb", "remove your cover photo"),
     ("addchannel", "add an upload channel"),
     ("channels", "manage your upload channels"),
+    ("delchannel", "remove an upload channel"),
     ("metadata", "manage file metadata tags"),
     ("settitle", "set title tag"),
     ("setauthor", "set author tag"),

@@ -176,3 +176,45 @@ def register_channel_handlers(app):
             await query.answer("🗑 Channel removed")
         text, markup = build_channels_view(uid)
         await _edit(query.message, text, markup)
+
+
+_orig_register_channels = register_channel_handlers
+
+
+def register_channel_handlers(app):
+    _orig_register_channels(app)
+
+    @app.on_message(filters.command("delchannel") & filters.private)
+    async def del_channel_cmd(client, message):
+        uid = message.from_user.id
+        chans = get_user_channels(uid)["channels"]
+
+        if len(message.command) < 2:
+            text, markup = build_channels_view(uid)
+            await message.reply_text(
+                "Usage: <code>/delchannel @channel</code> or "
+                "<code>/delchannel -100123456789</code>\n\n"
+                "Or tap 🗑 below.\n\n" + text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        raw = message.command[1].strip()
+        target_id = None
+        if raw.lstrip("-").isdigit():
+            target_id = int(raw)
+        else:
+            with suppress(Exception):
+                target_id = (await client.get_chat(raw)).id
+        if target_id is None:
+            for c in chans:
+                if c["title"].lower() == raw.lstrip("@").lower():
+                    target_id = c["id"]
+
+        if target_id is None or not any(c["id"] == target_id for c in chans):
+            await message.reply_text("❌ That channel is not in your list. See /channels.")
+            return
+
+        await _remove_channel(uid, target_id)
+        await message.reply_text("🗑 Channel removed. See /channels.")
