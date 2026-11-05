@@ -16,6 +16,7 @@ from pyrogram.types import InlineKeyboardButton as Btn
 from pyrogram.types import InlineKeyboardMarkup as Markup
 
 from plugins.channels import get_default_channel
+from plugins.premium import check_limits, record_download
 
 LOGGER = logging.getLogger("solurix.anime_downloader.downloader")
 URL_RE = re.compile(r"https?://\S+")
@@ -183,6 +184,7 @@ async def _run_job(client, status, job, quality, uid):
                 hint = "Make sure the bot is still an admin in your channel." if target != chat_id else "Please try again."
                 await safe_edit(status, f"❌ <b>Upload failed.</b>\n{hint}")
                 return
+        record_download(uid)
         where = "your channel" if target != chat_id else "this chat"
         await safe_edit(status, f"✅ <b>Done!</b>\n\n🎬 {esc(title[:60])}\n📤 Sent to {where}.")
     except Exception:
@@ -243,6 +245,10 @@ def register_download_handlers(app):
             await safe_edit(query.message, "✖ <b>Cancelled.</b>")
             return
         uid = query.from_user.id
+        allowed, reason = check_limits(uid, choice)
+        if not allowed:
+            await query.answer(reason, show_alert=True)
+            return
         if uid in ACTIVE:
             await query.answer("One download at a time. Please wait.", show_alert=True)
             return
@@ -260,3 +266,5 @@ def register_downloader_handlers(app):
     register_download_handlers(app)
     from plugins.sites import register_site_handlers
     register_site_handlers(app)
+    from plugins.premium import register_premium_handlers
+    register_premium_handlers(app)
