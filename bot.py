@@ -95,6 +95,8 @@ async def main() -> None:
 
         await bot.start()
         bot_started = True
+        from plugins.commands_menu import setup_commands
+        await setup_commands(bot)
         me = await bot.get_me()
         log.info("Started successfully as @%s", me.username or me.id)
         log.info("Brand: @Solurix_bots")
