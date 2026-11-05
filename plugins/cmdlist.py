@@ -1,7 +1,4 @@
-"""/cmd - full command list in small-caps style.
-
-Everyone sees the user commands. The owner also sees the owner commands.
-"""
+"""/cmd - full command list in small-caps style."""
 
 from pyrogram import filters
 from pyrogram.enums import ParseMode
@@ -9,25 +6,15 @@ from pyrogram.types import InlineKeyboardButton as Btn
 from pyrogram.types import InlineKeyboardMarkup as Markup
 
 from plugins.premium import is_owner
-
-_SC = str.maketrans(
-    "abcdefghijklmnopqrstuvwxyz",
-    "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ",
-)
-
-
-def sc(text: str) -> str:
-    return text.lower().translate(_SC)
-
+from plugins.style import sc
 
 USER_COMMANDS = [
     ("start", "start the bot / check alive"),
     ("help", "how to use the bot"),
     ("about", "about the bot"),
     ("mystatus", "view your plan and usage"),
-    ("settings", "video / document and metadata options"),
+    ("settings", "upload type, thumbnail, caption, metadata"),
     ("setcaption", "set your custom caption"),
-    ("setthumb", "set your cover photo"),
     ("thumb", "view your cover photo"),
     ("delthumb", "remove your cover photo"),
     ("addchannel", "add an upload channel"),
@@ -62,7 +49,7 @@ def _lines(items):
     return "\n\n".join(f"/{name} : {sc(desc)}" for name, desc in items)
 
 
-def build_cmd_text(uid: int) -> str:
+def build_cmd_text(uid):
     text = f"<b>{sc('commands')}</b>\n\n" + _lines(USER_COMMANDS)
     if is_owner(uid):
         text += f"\n\n━━━━━━━━━━━━━━━\n<b>{sc('owner commands')}</b>\n\n"
@@ -77,5 +64,5 @@ def register_cmd_handlers(app):
             build_cmd_text(message.from_user.id),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
-            reply_markup=Markup([[Btn("✖ Close", callback_data="aad:close")]]),
+            reply_markup=Markup([[Btn("✖ " + sc("close"), callback_data="aad:close")]]),
         )

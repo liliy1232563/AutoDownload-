@@ -435,3 +435,5 @@ def register_downloader_handlers(app):
     register_thumb_handlers(app)
     from plugins.settings import register_settings_handlers
     register_settings_handlers(app)
+    from plugins.cmdlist import register_cmd_handlers
+    register_cmd_handlers(app)
