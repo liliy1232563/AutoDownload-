@@ -135,3 +135,4 @@ async def resolve_url(url: str) -> Resolved:
 register(DirectLinkAdapter())
 register(ArchiveOrgAdapter())
 register(YtDlpAdapter())
+import adapters.apisites  # noqa: E402,F401

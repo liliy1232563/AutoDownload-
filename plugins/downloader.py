@@ -205,7 +205,7 @@ def quality_keyboard(token):
 def register_download_handlers(app):
     @app.on_message(
         filters.private & filters.text
-        & ~filters.command(["start", "help", "about", "addchannel", "channels", "setchannel"])
+        & ~filters.command(["start", "help", "about", "addchannel", "channels", "setchannel", "addsite", "sites", "removesite"])
         & filters.regex(URL_RE.pattern)
     )
     async def on_link(_client, message):
@@ -258,3 +258,5 @@ def register_downloader_handlers(app):
     from plugins.channels import register_channel_handlers
     register_channel_handlers(app)
     register_download_handlers(app)
+    from plugins.sites import register_site_handlers
+    register_site_handlers(app)
