@@ -437,3 +437,5 @@ def register_downloader_handlers(app):
     register_settings_handlers(app)
     from plugins.cmdlist import register_cmd_handlers
     register_cmd_handlers(app)
+    from plugins.helpmenu import register_help_handlers
+    register_help_handlers(app)

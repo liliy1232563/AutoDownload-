@@ -78,7 +78,7 @@ ABOUT_TEXT = about_text()
 def main_keyboard():
     return Markup([[
         Btn("• " + sc("about"), callback_data="aad:about"),
-        Btn(sc("help") + " •", callback_data="aad:help"),
+        Btn(sc("help") + " •", callback_data="hp:main"),
     ]])
 
 
