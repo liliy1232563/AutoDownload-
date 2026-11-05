@@ -130,16 +130,31 @@ async def _download(status, url, quality, workdir, title):
     return max(files, key=os.path.getsize), info
 
 
-async def _upload(client, status, path, info, title, quality, target, thumb=None):
+async def _upload(client, status, path, info, title, quality, target, thumb=None, uid=None):
+    from plugins.settings import build_caption, get_prefs
+
+    prefs = get_prefs(uid) if uid else {}
+    as_doc = prefs.get("upload_as") == "document"
+
+    # Telegram plays only mp4 as real video: convert, else fall back to document.
+    if not as_doc and not path.lower().endswith(".mp4"):
+        mp4 = os.path.splitext(path)[0] + "_v.mp4"
+        ok = await _ffmpeg("-i", path, "-c", "copy", "-movflags", "+faststart", mp4)
+        if ok and os.path.exists(mp4):
+            path = mp4
+        else:
+            as_doc = True
+
     size = os.path.getsize(path)
     if size > MAX_UPLOAD:
         raise RuntimeError("File is larger than Telegram's 2 GB limit")
+
     height = info.get("height")
+    width = info.get("width")
+    duration = int(info.get("duration") or 0)
     label = f"{height}p" if height else quality
-    caption = (
-        f"🎬 <b>{esc(title)}</b>\n\n🎞 Quality: <b>{esc(label)}</b>\n"
-        f"💾 Size: <b>{human(size)}</b>\n\n<i>Powered by @Solurix_bots</i>"
-    )
+    caption = build_caption(prefs, title, label, size, duration, width, height)
+
     started = time.monotonic()
     last = {"t": 0.0}
 
@@ -151,18 +166,22 @@ async def _upload(client, status, path, info, title, quality, target, thumb=None
         speed = current / max(now - started, 0.1)
         eta = (total - current) / speed if speed else None
         pct = current * 100 / total if total else 0
-        await safe_edit(status, progress_text("⬆️ Uploading", title, pct, current, total, speed, eta))
+        await safe_edit(
+            status,
+            progress_text("⬆️ Uploading", title, pct, current, total, speed, eta),
+        )
 
-    if path.lower().endswith(".mp4"):
-        await client.send_video(
-            chat_id=target, video=path, caption=caption, parse_mode=ParseMode.HTML,
-            duration=int(info.get("duration") or 0), width=int(info.get("width") or 0),
-            height=int(height or 0), supports_streaming=True, thumb=thumb, progress=up_progress,
+    if as_doc:
+        await client.send_document(
+            chat_id=target, document=path, caption=caption or None,
+            parse_mode=ParseMode.HTML, thumb=thumb, progress=up_progress,
         )
     else:
-        await client.send_document(
-            chat_id=target, document=path, caption=caption,
-            parse_mode=ParseMode.HTML, thumb=thumb, progress=up_progress,
+        await client.send_video(
+            chat_id=target, video=path, caption=caption or None,
+            parse_mode=ParseMode.HTML, duration=duration,
+            width=int(width or 0), height=int(height or 0),
+            supports_streaming=True, thumb=thumb, progress=up_progress,
         )
 
 
@@ -253,7 +272,7 @@ async def _run_job(client, status, job, quality, uid):
                 )
                 thumb = await _thumb_for(uid, path, sub)
                 try:
-                    await _upload(client, status, path, info, title, q, target, thumb)
+                    await _upload(client, status, path, info, title, q, target, thumb, uid)
                 except Exception:
                     LOGGER.exception("Upload failed")
                     hint = (
@@ -345,7 +364,7 @@ def quality_keyboard(token):
 def register_download_handlers(app):
     @app.on_message(
         filters.private & filters.text
-        & ~filters.command(["start", "help", "about", "addchannel", "channels", "setchannel", "addsite", "sites", "removesite"])
+        & ~filters.command(["start", "help", "about", "addchannel", "channels", "setchannel", "addsite", "sites", "removesite", "settings", "setcaption", "setthumb", "mystatus"])
         & filters.regex(URL_RE.pattern)
     )
     async def on_link(_client, message):
@@ -407,3 +426,5 @@ def register_downloader_handlers(app):
     from plugins.premium import register_premium_handlers
     register_premium_handlers(app)
     register_thumb_handlers(app)
+    from plugins.settings import register_settings_handlers
+    register_settings_handlers(app)
