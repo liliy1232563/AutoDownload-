@@ -145,6 +145,10 @@ async def _upload(client, status, path, info, title, quality, target, thumb=None
         else:
             as_doc = True
 
+    if prefs.get("filemeta") and prefs.get("tags"):
+        from plugins.filemeta import apply_metadata
+        path = await apply_metadata(path, prefs["tags"], {"title": title, "quality": quality})
+
     size = os.path.getsize(path)
     if size > MAX_UPLOAD:
         raise RuntimeError("File is larger than Telegram's 2 GB limit")
@@ -364,7 +368,7 @@ def quality_keyboard(token):
 def register_download_handlers(app):
     @app.on_message(
         filters.private & filters.text
-        & ~filters.command(["start", "help", "about", "addchannel", "channels", "setchannel", "addsite", "sites", "removesite", "settings", "setcaption", "setthumb", "mystatus"])
+        & ~filters.command(["start", "help", "about", "addchannel", "channels", "setchannel", "addsite", "sites", "removesite", "settings", "setcaption", "setthumb", "mystatus", "metadata", "settitle", "setauthor", "setartist", "setaudio", "setsubtitle", "setvideo", "setencoded_by", "setcustom_tag", "cmd"])
         & filters.regex(URL_RE.pattern)
     )
     async def on_link(_client, message):

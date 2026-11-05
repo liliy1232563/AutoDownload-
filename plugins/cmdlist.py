@@ -32,6 +32,15 @@ USER_COMMANDS = [
     ("delthumb", "remove your cover photo"),
     ("addchannel", "add an upload channel"),
     ("channels", "manage your upload channels"),
+    ("metadata", "manage file metadata tags"),
+    ("settitle", "set title tag"),
+    ("setauthor", "set author tag"),
+    ("setartist", "set artist tag"),
+    ("setaudio", "set audio track title"),
+    ("setsubtitle", "set subtitle track title"),
+    ("setvideo", "set video track title"),
+    ("setencoded_by", "set encoded by tag"),
+    ("setcustom_tag", "set custom tag"),
     ("cmd", "show this command list"),
 ]
 
