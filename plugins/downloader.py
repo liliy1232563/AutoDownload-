@@ -130,7 +130,7 @@ async def _download(status, url, quality, workdir, title):
     return max(files, key=os.path.getsize), info
 
 
-async def _upload(client, status, path, info, title, quality, target):
+async def _upload(client, status, path, info, title, quality, target, thumb=None):
     size = os.path.getsize(path)
     if size > MAX_UPLOAD:
         raise RuntimeError("File is larger than Telegram's 2 GB limit")
@@ -157,13 +157,77 @@ async def _upload(client, status, path, info, title, quality, target):
         await client.send_video(
             chat_id=target, video=path, caption=caption, parse_mode=ParseMode.HTML,
             duration=int(info.get("duration") or 0), width=int(info.get("width") or 0),
-            height=int(height or 0), supports_streaming=True, progress=up_progress,
+            height=int(height or 0), supports_streaming=True, thumb=thumb, progress=up_progress,
         )
     else:
         await client.send_document(
             chat_id=target, document=path, caption=caption,
-            parse_mode=ParseMode.HTML, progress=up_progress,
+            parse_mode=ParseMode.HTML, thumb=thumb, progress=up_progress,
         )
+
+
+THUMB_DIR = os.path.join("data", "thumbs")
+THUMB_FILTER = "scale=320:320:force_original_aspect_ratio=decrease"
+ALL_TARGETS = (360, 480, 720, 1080)
+
+
+def thumb_path(uid):
+    return os.path.join(THUMB_DIR, f"{uid}.jpg")
+
+
+async def _ffmpeg(*args):
+    if not shutil.which("ffmpeg"):
+        return False
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-loglevel", "error", *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=60)
+        return proc.returncode == 0
+    except Exception:
+        if proc is not None and proc.returncode is None:
+            with suppress(Exception):
+                proc.kill()
+        return False
+
+
+async def _thumb_for(uid, video_path, workdir):
+    """Custom thumbnail if the user set one, else a frame from the video."""
+    custom = thumb_path(uid)
+    if os.path.exists(custom):
+        return custom
+    auto = os.path.join(workdir, "auto_thumb.jpg")
+    for seek in (["-ss", "3"], []):
+        if await _ffmpeg(*seek, "-i", video_path, "-vframes", "1",
+                         "-vf", THUMB_FILTER, "-q:v", "5", auto):
+            if os.path.exists(auto):
+                return auto
+    return None
+
+
+async def _plan_qualities(url, quality):
+    """'all' -> every distinct quality the source really has."""
+    if quality != "all":
+        return [quality]
+    try:
+        info = await asyncio.to_thread(probe_formats, url)
+    except Exception:
+        return ["best"]
+    heights = sorted({
+        int(f["height"]) for f in (info.get("formats") or [])
+        if f.get("height") and f.get("vcodec") != "none"
+    })
+    if not heights:
+        return ["best"]
+    plan = []
+    for target in ALL_TARGETS:
+        fits = [h for h in heights if h <= target]
+        if fits and str(max(fits)) not in plan:
+            plan.append(str(max(fits)))
+    return plan or ["best"]
 
 
 async def _run_job(client, status, job, quality, uid):
@@ -172,27 +236,100 @@ async def _run_job(client, status, job, quality, uid):
     title = job["title"]
     chat_id = status.chat.id
     target = get_default_channel(uid) or chat_id
+    total = 1
     try:
         await safe_edit(status, "⏳ <b>Queued…</b>\nWaiting for a free slot.")
         async with SLOTS:
-            await safe_edit(status, "🚀 <b>Starting download…</b>")
-            path, info = await _download(status, job["url"], quality, workdir, title)
-            try:
-                await _upload(client, status, path, info, title, quality, target)
-            except Exception:
-                LOGGER.exception("Upload failed")
-                hint = "Make sure the bot is still an admin in your channel." if target != chat_id else "Please try again."
-                await safe_edit(status, f"❌ <b>Upload failed.</b>\n{hint}")
-                return
+            plan = await _plan_qualities(job["url"], quality)
+            total = len(plan)
+            for i, q in enumerate(plan, start=1):
+                part = f" ({i}/{total})" if total > 1 else ""
+                label = "Best" if q == "best" else f"{q}p"
+                await safe_edit(status, f"🚀 <b>Starting download{part}…</b>\n🎞 {label}")
+                sub = os.path.join(workdir, str(i))
+                os.makedirs(sub, exist_ok=True)
+                path, info = await _download(
+                    status, job["url"], q, sub, f"{title} • {label}{part}"
+                )
+                thumb = await _thumb_for(uid, path, sub)
+                try:
+                    await _upload(client, status, path, info, title, q, target, thumb)
+                except Exception:
+                    LOGGER.exception("Upload failed")
+                    hint = (
+                        "Make sure the bot is still an admin in your channel."
+                        if target != chat_id else "Please try again."
+                    )
+                    await safe_edit(status, f"❌ <b>Upload failed.</b>\n{hint}")
+                    return
+                shutil.rmtree(sub, ignore_errors=True)
         record_download(uid)
         where = "your channel" if target != chat_id else "this chat"
-        await safe_edit(status, f"✅ <b>Done!</b>\n\n🎬 {esc(title[:60])}\n📤 Sent to {where}.")
+        await safe_edit(
+            status,
+            f"✅ <b>Done!</b>\n\n🎬 {esc(title[:60])}\n📦 {total} file(s) sent to {where}.",
+        )
     except Exception:
         LOGGER.exception("Download failed")
-        await safe_edit(status, "❌ <b>Download failed.</b>\nThe link may be unsupported, private, or expired.")
+        await safe_edit(
+            status,
+            "❌ <b>Download failed.</b>\nThe link may be unsupported, private, or expired.",
+        )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         ACTIVE.discard(uid)
+
+
+def register_thumb_handlers(app):
+    @app.on_message(filters.command("setthumb") & filters.private)
+    async def set_thumb(client, message):
+        src = message.reply_to_message
+        photo = message.photo or (src.photo if src else None)
+        if not photo:
+            await message.reply_text(
+                "🖼 Send a photo with the caption /setthumb,\n"
+                "or reply to a photo with /setthumb."
+            )
+            return
+        if not shutil.which("ffmpeg"):
+            await message.reply_text("❌ This server has no ffmpeg, so thumbnails can't be processed.")
+            return
+        uid = message.from_user.id
+        os.makedirs(THUMB_DIR, exist_ok=True)
+        raw = None
+        try:
+            raw = await client.download_media(
+                photo.file_id,
+                file_name=os.path.abspath(os.path.join(THUMB_DIR, f"{uid}_raw.jpg")),
+            )
+            ok = bool(raw) and await _ffmpeg(
+                "-i", raw, "-vf", THUMB_FILTER, "-q:v", "5", thumb_path(uid)
+            )
+        finally:
+            if raw:
+                with suppress(OSError):
+                    os.remove(raw)
+        if ok:
+            await message.reply_text("✅ Thumbnail saved. It will be used on all your uploads.\n\n/thumb to view • /delthumb to remove")
+        else:
+            await message.reply_text("❌ Could not save that photo. Try a different one.")
+
+    @app.on_message(filters.command("delthumb") & filters.private)
+    async def del_thumb(_client, message):
+        path = thumb_path(message.from_user.id)
+        if os.path.exists(path):
+            os.remove(path)
+            await message.reply_text("🗑 Thumbnail removed. Auto thumbnail (video frame) will be used.")
+        else:
+            await message.reply_text("You have no custom thumbnail.")
+
+    @app.on_message(filters.command("thumb") & filters.private)
+    async def view_thumb(_client, message):
+        path = thumb_path(message.from_user.id)
+        if os.path.exists(path):
+            await message.reply_photo(path, caption="🖼 Your current thumbnail")
+        else:
+            await message.reply_text("No custom thumbnail set.\n\nSend a photo with caption /setthumb.")
 
 
 def quality_keyboard(token):
@@ -200,6 +337,7 @@ def quality_keyboard(token):
         [Btn("📱 360p", callback_data=f"dl:{token}:360"), Btn("📺 480p", callback_data=f"dl:{token}:480")],
         [Btn("🖥 720p", callback_data=f"dl:{token}:720"), Btn("🎥 1080p", callback_data=f"dl:{token}:1080")],
         [Btn("👑 Best Quality", callback_data=f"dl:{token}:best")],
+            [Btn("📦 All Quality 💎", callback_data=f"dl:{token}:all")],
         [Btn("✖ Cancel", callback_data=f"dl:{token}:x")],
     ])
 
@@ -232,7 +370,7 @@ def register_download_handlers(app):
         )
         await safe_edit(wait, text, quality_keyboard(token))
 
-    @app.on_callback_query(filters.regex(r"^dl:([0-9a-f]{8}):(360|480|720|1080|best|x)$"))
+    @app.on_callback_query(filters.regex(r"^dl:([0-9a-f]{8}):(360|480|720|1080|best|all|x)$"))
     async def on_quality(client, query):
         _, token, choice = query.data.split(":")
         job = PENDING.get(token)
@@ -268,3 +406,4 @@ def register_downloader_handlers(app):
     register_site_handlers(app)
     from plugins.premium import register_premium_handlers
     register_premium_handlers(app)
+    register_thumb_handlers(app)

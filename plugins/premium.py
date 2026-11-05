@@ -102,7 +102,7 @@ def check_limits(uid, choice):
     """Return (allowed, message)."""
     if is_premium(uid):
         return True, ""
-    quality = 9999 if choice == "best" else int(choice)
+    quality = 9999 if choice in ("best", "all") else int(choice)
     if quality > FREE_MAX_QUALITY:
         return False, (
             f"🔒 This quality is for Premium users.\n"
