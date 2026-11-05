@@ -19,14 +19,16 @@ LINE = "━━━━━━━━━━━━━━━━━━"
 
 def start_text(name):
     return (
-        "✨ <b>" + sc("anime downloader") + "</b> ✨\n"
-        + LINE + "\n\n"
-        + "👋 " + sc("hey") + f" <b>{html.escape(name)}</b>!\n\n"
-        + "➲ " + sc("send a link and pick a quality") + "\n"
-        + "➲ " + sc("live progress bar while it downloads") + "\n"
-        + "➲ " + sc("auto upload to your own channel") + "\n\n"
-        + "⚡ <i>" + sc("fast • smooth • premium") + "</i>\n"
-        + LINE + "\n"
+        "✨ <b>" + sc("welcome to the download hub,") + f" {html.escape(name)}!</b> ✨\n\n"
+        + sc("i am your fast video downloader. send me a link,")
+        + "\n" + sc("pick a quality and i will deliver the file.") + "\n\n"
+        + "📥 <b>" + sc("how to download:") + "</b>\n"
+        + sc("paste a video link, choose a quality, and watch the live progress bar.") + "\n\n"
+        + "📌 " + sc("example") + ": " + sc("a direct .mp4 link") + "\n"
+        + "📌 " + sc("example") + ": " + sc("an archive.org video page") + "\n\n"
+        + "📡 <b>" + sc("auto upload:") + "</b>\n"
+        + sc("add your channel with") + " /addchannel " + sc("and every file lands there.") + "\n\n"
+        + "🚀 <b>" + sc("paste your first link to begin!") + "</b>\n\n"
         + "<i>" + sc("powered by") + " @Solurix_bots</i>"
     )
 
