@@ -216,7 +216,7 @@ def register_download_handlers(app):
         except Exception as exc:
             LOGGER.exception("Link check failed")
             reason = esc(str(exc).replace("ERROR: ", "")[:200])
-            await safe_edit(wait, "❌ <b>Link not supported or not accessible.</b>\nSend a direct video link or a supported episode URL.")
+            await safe_edit(wait, f"❌ <b>Link not supported or not accessible.</b>\n\n<code>{reason}</code>")
             return
         if len(PENDING) >= MAX_PENDING:
             PENDING.pop(next(iter(PENDING)))
